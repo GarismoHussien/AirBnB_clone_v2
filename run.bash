@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+!/usr/bin/env bash
 HBNB_ENV=''
 HBNB_TYPE_STORAGE=''
 HBNB_MYSQL_USER=''
