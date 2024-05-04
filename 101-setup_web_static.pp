@@ -1,123 +1,92 @@
-#!/usr/bin/puppet apply
-# AirBnB clone web server setup and configuration
-exec { 'apt-get-update':
-  command => '/usr/bin/apt-get update',
-  path    => '/usr/bin:/usr/sbin:/bin',
-}
+#!/usr/bin/python3
+"""A module for web application deployment with Fabric."""
+import os
+from datetime import datetime
+from fabric.api import env, local, put, run, runs_once
 
-exec { 'remove-current':
-  command => 'rm -rf /data/web_static/current',
-  path    => '/usr/bin:/usr/sbin:/bin',
-}
 
-package { 'nginx':
-  ensure  => installed,
-  require => Exec['apt-get-update'],
-}
+env.hosts = ["34.73.0.174", "35.196.78.105"]
+"""The list of host server IP addresses."""
 
-file { '/var/www':
-  ensure  => directory,
-  mode    => '0755',
-  recurse => true,
-  require => Package['nginx'],
-}
 
-file { '/var/www/html/index.html':
-  content => 'Hello, World!',
-  require => File['/var/www'],
-}
+@runs_once
+def do_pack():
+    """Archives the static files."""
+    if not os.path.isdir("versions"):
+        os.mkdir("versions")
+    cur_time = datetime.now()
+    output = "versions/web_static_{}{}{}{}{}{}.tgz".format(
+        cur_time.year,
+        cur_time.month,
+        cur_time.day,
+        cur_time.hour,
+        cur_time.minute,
+        cur_time.second
+    )
+    try:
+        print("Packing web_static to {}".format(output))
+        local("tar -cvzf {} web_static".format(output))
+        archize_size = os.stat(output).st_size
+        print("web_static packed: {} -> {} Bytes".format(output, archize_size))
+    except Exception:
+        output = None
+    return output
 
-file { '/var/www/error/404.html':
-  content => "Ceci n'est pas une page",
-  require => File['/var/www'],
-}
 
-exec { 'make-static-files-folder':
-  command => 'mkdir -p /data/web_static/releases/test /data/web_static/shared',
-  path    => '/usr/bin:/usr/sbin:/bin',
-  require => Package['nginx'],
-}
+def do_deploy(archive_path):
+    """Deploys the static files to the host servers.
+    Args:
+        archive_path (str): The path to the archived static files.
+    """
+    if not os.path.exists(archive_path):
+        return False
+    file_name = os.path.basename(archive_path)
+    folder_name = file_name.replace(".tgz", "")
+    folder_path = "/data/web_static/releases/{}/".format(folder_name)
+    success = False
+    try:
+        put(archive_path, "/tmp/{}".format(file_name))
+        run("mkdir -p {}".format(folder_path))
+        run("tar -xzf /tmp/{} -C {}".format(file_name, folder_path))
+        run("rm -rf /tmp/{}".format(file_name))
+        run("mv {}web_static/* {}".format(folder_path, folder_path))
+        run("rm -rf {}web_static".format(folder_path))
+        run("rm -rf /data/web_static/current")
+        run("ln -s {} /data/web_static/current".format(folder_path))
+        print('New version deployed!')
+        success = True
+    except Exception:
+        success = False
+    return success
 
-file { '/data/web_static/releases/test/index.html':
-  content =>
-"<!DOCTYPE html>
-<html lang='en-US'>
-	<head>
-		<title>Home - AirBnB Clone</title>
-	</head>
-	<body>
-		<h1>Welcome to AirBnB!</h1>
-	<body>
-</html>
-",
-  replace => true,
-  require => Exec['make-static-files-folder'],
-}
 
-exec { 'link-static-files':
-  command => 'ln -sf /data/web_static/releases/test/ /data/web_static/current',
-  path    => '/usr/bin:/usr/sbin:/bin',
-  require => [
-    Exec['remove-current'],
-    File['/data/web_static/releases/test/index.html'],
-  ],
-}
+def deploy():
+    """Archives and deploys the static files to the host servers.
+    """
+    archive_path = do_pack()
+    return do_deploy(archive_path) if archive_path else False
 
-exec { 'change-data-owner':
-  command => 'chown -hR ubuntu:ubuntu /data',
-  path    => '/usr/bin:/usr/sbin:/bin',
-  require => Exec['link-static-files'],
-}
 
-file { '/etc/nginx/sites-available/default':
-  ensure  => present,
-  mode    => '0644',
-  content =>
-"server {
-	listen 80 default_server;
-	listen [::]:80 default_server;
-	server_name _;
-	index index.html index.htm;
-	error_page 404 /404.html;
-	add_header X-Served-By \$hostname;
-	location / {
-		root /var/www/html/;
-		try_files \$uri \$uri/ =404;
-	}
-	location /hbnb_static/ {
-		alias /data/web_static/current/;
-		try_files \$uri \$uri/ =404;
-	}
-	if (\$request_filename ~ redirect_me){
-		rewrite ^ https://sketchfab.com/bluepeno/models permanent;
-	}
-	location = /404.html {
-		root /var/www/error/;
-		internal;
-	}
-}",
-  require => [
-    Package['nginx'],
-    File['/var/www/html/index.html'],
-    File['/var/www/error/404.html'],
-    Exec['change-data-owner']
-  ],
-}
-
-exec { 'enable-site':
-  command => "ln -sf '/etc/nginx/sites-available/default' '/etc/nginx/sites-enabled/default'",
-  path    => '/usr/bin:/usr/sbin:/bin',
-  require => File['/etc/nginx/sites-available/default'],
-}
-
-exec { 'start-nginx':
-  command => 'sudo service nginx restart',
-  path    => '/usr/bin:/usr/sbin:/bin',
-  require => [
-    Exec['enable-site'],
-    Package['nginx'],
-    File['/data/web_static/releases/test/index.html'],
-  ],
-}
-
-Exec['start-nginx']
+def do_clean(number=0):
+    """Deletes out-of-date archives of the static files.
+    Args:
+        number (Any): The number of archives to keep.
+    """
+    archives = os.listdir('versions/')
+    archives.sort(reverse=True)
+    start = int(number)
+    if not start:
+        start += 1
+    if start < len(archives):
+        archives = archives[start:]
+    else:
+        archives = []
+    for archive in archives:
+        os.unlink('versions/{}'.format(archive))
+    cmd_parts = [
+        "rm -rf $(",
+        "find /data/web_static/releases/ -maxdepth 1 -type d -iregex",
+        " '/data/web_static/releases/web_static_.*'",
+        " | sort -r | tr '\\n' ' ' | cut -d ' ' -f{}-)".format(start + 1)
+    ]
+    run(''.join(cmd_parts))

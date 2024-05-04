@@ -38,11 +38,14 @@ HOME_PAGE="<!DOCTYPE html>
 	<body>
 </html>
 "
-# shellcheck disable=SC2230
-if [[ "$(which nginx | grep -c nginx)" == '0' ]]; then
-    apt-get update
-    apt-get -y install nginx
+
+# Check if nginx is installed
+if ! command -v nginx &> /dev/null
+then
+    # Install nginx
+    dnf -y install nginx
 fi
+
 mkdir -p /var/www/html /var/www/error
 chmod -R 755 /var/www
 echo 'Hello World!' > /var/www/html/index.html
@@ -52,11 +55,13 @@ mkdir -p /data/web_static/releases/test /data/web_static/shared
 echo -e "$HOME_PAGE" > /data/web_static/releases/test/index.html
 [ -d /data/web_static/current ] && rm -rf /data/web_static/current
 ln -sf /data/web_static/releases/test/ /data/web_static/current
-chown -hR ubuntu:ubuntu /data
-bash -c "echo -e '$SERVER_CONFIG' > /etc/nginx/sites-available/default"
-ln -sf '/etc/nginx/sites-available/default' '/etc/nginx/sites-enabled/default'
-if [ "$(pgrep -c nginx)" -le 0 ]; then
-	service nginx start
-else
-	service nginx restart
-fi
+
+# Give ownership to ahmedhussien user and group recursively
+chown -R ahmedhussien:ahmedhussien /data
+
+# Update Nginx configuration
+echo -e "$SERVER_CONFIG" > /etc/nginx/conf.d/default.conf
+
+# Restart Nginx
+systemctl restart nginx
+
